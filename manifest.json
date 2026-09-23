@@ -1,13 +1,13 @@
 {
-  "id": "dev.bdg.example-basic",
+  "id": "dev.bdg.simai-exporter",
   "version": "0.1.0",
   "name": {
-    "zh": "示例插件（基础）",
-    "en": "Example Plugin (basic)"
+    "zh": "舞萌 Simai 导出",
+    "en": "maimai Simai Export"
   },
   "description": {
-    "zh": "验证插件宿主加载/启停的最小示例，同时提供 renderer 与 main 两个入口。",
-    "en": "Minimal sample verifying the plugin host load/unload with both a renderer and a main entry."
+    "zh": "把所有标记点按最小分拍网格导出为舞萌（Simai）谱面，并写入 BPM 变化标记。",
+    "en": "Export all markers as a maimai (Simai) chart on the minimal subdivision grid, including BPM changes."
   },
   "main": "main.js",
   "renderer": "renderer.js"

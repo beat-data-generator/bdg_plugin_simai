@@ -1,252 +1,195 @@
+/// <reference path="plugin-api.d.ts" />
 window.__bdgPluginRegister(function activate(api) {
-  api.log("renderer entry activated (id=" + api.id + ")");
+  "use strict";
 
-  var tr = api.trackTypes.register({
-    id: "flip",
-    trackName: { zh: "翻转轨", en: "Flip track" },
-    pointName: { zh: "翻转点", en: "Flip" },
-    color: "#e11d48",
-    fields: [
-      {
-        key: "direction",
-        label: { zh: "方向", en: "Direction" },
-        type: "enum",
-        default: "up",
-        options: [
-          { value: "up", label: { zh: "上", en: "Up" } },
-          { value: "down", label: { zh: "下", en: "Down" } },
+  var MEASURE_BEATS = 4;
+  var FINE_PER_BEAT = 96;
+  var MEASURE_FINE = MEASURE_BEATS * FINE_PER_BEAT;
+  var DEFAULT_POS = 1;
+
+  function gcd(a, b) {
+    a = Math.abs(a);
+    b = Math.abs(b);
+    while (b) {
+      var t = a % b;
+      a = b;
+      b = t;
+    }
+    return a;
+  }
+
+  function formatTempo(value) {
+    if (!isFinite(value) || value <= 0) value = 120;
+    var rounded = Math.round(value * 1000) / 1000;
+    if (Math.abs(rounded - Math.round(rounded)) < 1e-9) {
+      return String(Math.round(rounded));
+    }
+    return String(rounded);
+  }
+
+  function readPosition(attrs) {
+    if (!attrs) return DEFAULT_POS;
+    var raw = attrs.pos;
+    if (raw === undefined) raw = attrs.position;
+    if (raw === undefined) raw = attrs.button;
+    if (raw === undefined) raw = attrs.key;
+    if (raw === undefined) return DEFAULT_POS;
+    if (typeof raw === "string") {
+      var token = raw.trim();
+      if (/^A[1-8]$/i.test(token)) return token.toUpperCase();
+    }
+    var num = parseInt(raw, 10);
+    if (isFinite(num) && num >= 1 && num <= 8) return String(num);
+    return DEFAULT_POS;
+  }
+
+  function bucketPush(buckets, measure, item) {
+    if (!buckets[measure]) buckets[measure] = [];
+    buckets[measure].push(item);
+  }
+
+  function buildChart(snapshot) {
+    var tapBuckets = {};
+    var bpmBuckets = {};
+    var maxFine = 0;
+
+    var baseBpm = Number(snapshot.baseBpm);
+    if (!isFinite(baseBpm) || baseBpm <= 0) baseBpm = 120;
+
+    var initialBpm = api.project.bpmAtBeat(1e-6);
+    if (!isFinite(initialBpm) || initialBpm <= 0) initialBpm = baseBpm;
+    bucketPush(bpmBuckets, 0, { fine: 0, bpm: initialBpm });
+
+    var markers = snapshot.markers || [];
+    for (var i = 0; i < markers.length; i++) {
+      var beat = Number(markers[i].beat);
+      if (!isFinite(beat) || beat < 0) continue;
+      var fi = Math.round(beat * FINE_PER_BEAT);
+      var measure = Math.floor(fi / MEASURE_FINE);
+      bucketPush(tapBuckets, measure, {
+        fine: fi - measure * MEASURE_FINE,
+        pos: readPosition(markers[i].attrs),
+      });
+      if (fi > maxFine) maxFine = fi;
+    }
+
+    var points = snapshot.bpmPoints || [];
+    for (var j = 0; j < points.length; j++) {
+      var pBeat = Number(points[j].beat);
+      if (!isFinite(pBeat) || pBeat <= 0) continue;
+      var pf = Math.round(pBeat * FINE_PER_BEAT);
+      var pm = Math.floor(pf / MEASURE_FINE);
+      var bpm = api.project.bpmAtBeat(pBeat + 1e-6);
+      if (!isFinite(bpm) || bpm <= 0) continue;
+      bucketPush(bpmBuckets, pm, { fine: pf - pm * MEASURE_FINE, bpm: bpm });
+      if (pf > maxFine) maxFine = pf;
+    }
+
+    var lastMeasure = Math.floor(maxFine / MEASURE_FINE);
+    var lines = [];
+    var totalNotes = 0;
+
+    for (var m = 0; m <= lastMeasure; m++) {
+      var notes = tapBuckets[m] || [];
+      var tempos = bpmBuckets[m] || [];
+      notes.sort(function (a, b) {
+        return a.fine - b.fine;
+      });
+      tempos.sort(function (a, b) {
+        return a.fine - b.fine;
+      });
+
+      var g = MEASURE_FINE;
+      for (var ni = 0; ni < notes.length; ni++) g = gcd(g, notes[ni].fine);
+      for (var ti = 0; ti < tempos.length; ti++) g = gcd(g, tempos[ti].fine);
+      if (g <= 0) g = MEASURE_FINE;
+
+      var n = MEASURE_FINE / g;
+      var slotNote = new Array(n);
+      var slotBpm = new Array(n);
+
+      for (var na = 0; na < notes.length; na++) {
+        var noteSlot = notes[na].fine / g;
+        if (!slotNote[noteSlot]) {
+          slotNote[noteSlot] = notes[na].pos;
+          totalNotes++;
+        }
+      }
+      for (var tb = 0; tb < tempos.length; tb++) {
+        var bpmSlot = tempos[tb].fine / g;
+        var token = "(" + formatTempo(tempos[tb].bpm) + ")";
+        slotBpm[bpmSlot] = slotBpm[bpmSlot] ? slotBpm[bpmSlot] + token : token;
+      }
+
+      var slots = [];
+      for (var si = 0; si < n; si++) {
+        slots.push((slotBpm[si] || "") + (slotNote[si] || ""));
+      }
+
+      var prefix = slotBpm[0] || "";
+      if (prefix) slots[0] = slotNote[0] || "";
+
+      lines.push(prefix + "{" + n + "}" + slots.join(",") + ",");
+    }
+
+    var text = (lines.length ? lines.join("\n") : "") + "\nE\n";
+    return { text: text, noteCount: totalNotes, measureCount: lines.length };
+  }
+
+  function sanitizeFileName(name) {
+    var base = String(name || "chart")
+      .replace(/[\\/:*?"<>|]+/g, "_")
+      .trim();
+    return base || "chart";
+  }
+
+  function runExport() {
+    var snapshot = api.project.snapshot();
+    var result = buildChart(snapshot);
+    if (result.noteCount === 0) {
+      api.log("Simai export: no markers found, exporting an empty chart");
+    }
+    return api.system
+      .saveFile({
+        title: "导出舞萌 Simai 谱面",
+        defaultPath: sanitizeFileName(snapshot.name) + ".simai.txt",
+        filters: [
+          { name: "Simai chart", extensions: ["txt", "simai"] },
+          { name: "All files", extensions: ["*"] },
         ],
-      },
-      {
-        key: "power",
-        label: { zh: "力度", en: "Power" },
-        type: "number",
-        default: 1,
-        min: 0,
-        max: 10,
-        step: 0.5,
-      },
-      {
-        key: "hold",
-        label: { zh: "长按", en: "Hold" },
-        type: "bool",
-        default: false,
-      },
-    ],
-  });
-  api.log("track type register:", tr);
-
-  var stopEvents = [];
-
-  function clearStopEvents() {
-    for (var i = 0; i < stopEvents.length; i++) stopEvents[i]();
-    stopEvents.length = 0;
-  }
-
-  function el(tag, cls, text) {
-    var n = document.createElement(tag);
-    if (cls) n.className = cls;
-    if (text !== undefined) n.textContent = text;
-    return n;
-  }
-
-  var panel = api.ui.registerPanel({
-    id: "demo",
-    title: { zh: "示例面板", en: "Demo Panel" },
-    mount: function mount(host) {
-      host.textContent = "";
-
-      var wrap = el("div", "demo-wrap");
-      host.appendChild(wrap);
-
-      var head = el("div", "demo-head");
-      head.textContent = api.id + " v" + api.version;
-      wrap.appendChild(head);
-
-      var stats = el("div", "demo-row");
-      wrap.appendChild(stats);
-
-      var log = el("pre", "demo-log");
-      wrap.appendChild(log);
-
-      function renderStats() {
-        var s = api.project.snapshot();
-        var pos = api.player.positionMs();
-        stats.textContent =
-          "tracks=" + s.tracks.length +
-          " markers=" + s.markers.length +
-          " bpm=" + s.baseBpm.toFixed(1) +
-          " t=" + pos.toFixed(0) + "ms";
-      }
-
-      function logText(msg) {
-        log.textContent = msg + "\n" + log.textContent;
-      }
-
-      stopEvents.push(api.events.on("project", renderStats));
-      stopEvents.push(api.events.on("playhead", renderStats));
-
-      var btnAdd = el("button", "demo-btn", "add marker @ playhead");
-      btnAdd.addEventListener("click", function () {
-        var beat = api.project.beatOfTime(api.player.positionMs());
-        var s = api.project.snapshot();
-        var trackId = s.tracks.length ? s.tracks[0].id : "";
-        if (!trackId) return;
-        var id = api.project.edit.addMarker({ trackId: trackId, beat: beat });
-        logText("added marker " + id);
-      });
-      wrap.appendChild(btnAdd);
-
-      var btnPing = el("button", "demo-btn", "ping main.js");
-      btnPing.addEventListener("click", function () {
-        api.callMain("ping", 1, 2)
-          .then(function (res) {
-            logText("main says: " + res);
-          })
-          .catch(function (err) {
-            logText("main error: " + err);
-          });
-      });
-      wrap.appendChild(btnPing);
-
-      var btnExport = el("button", "demo-btn", "export tracks to txt");
-      btnExport.addEventListener("click", function () {
-        var s = api.project.snapshot();
-        var lines = s.markers.map(function (m) {
-          return m.timeMs.toFixed(3) + " (beat " + m.beat + ")";
-        });
-        api.system
-          .saveFile({
-            title: "Save sample export",
-            defaultPath: "tracks.txt",
-            filters: [{ name: "Text", extensions: ["txt"] }],
-          })
-          .then(function (res) {
-            if (res.canceled || !res.filePath) return;
-            return api.system.writeText(res.filePath, lines.join("\n"));
-          })
+      })
+      .then(function (res) {
+        if (res.canceled || !res.filePath) return;
+        return api.system
+          .writeText(res.filePath, result.text)
           .then(function (ok) {
-            logText(ok ? "saved" : "write failed");
+            api.log(
+              "Simai export:",
+              ok ? "saved" : "write failed",
+              res.filePath,
+              "notes=" + result.noteCount,
+              "measures=" + result.measureCount,
+            );
           });
+      })
+      .catch(function (err) {
+        api.log("Simai export error:", err);
       });
-      wrap.appendChild(btnExport);
+  }
 
-      renderStats();
-      logText("panel mounted");
-      return function unmount() {
-        clearStopEvents();
-        host.textContent = "";
-      };
-    },
+  api.ui.registerExporter({
+    label: { zh: "舞萌 Simai 谱面", en: "maimai Simai chart" },
+    run: runExport,
   });
 
   api.ui.registerAction({
-    label: { zh: "切换示例面板", en: "Toggle demo panel" },
-    run: function () {
-      panel.toggle();
-    },
+    label: { zh: "导出舞萌 Simai 谱面", en: "Export maimai Simai chart" },
+    run: runExport,
   });
 
-  api.ui.registerShortcut({
-    id: "toggle-demo",
-    label: { zh: "切换示例面板", en: "Toggle demo panel" },
-    combo: "Alt+1",
-    run: function () {
-      panel.toggle();
-    },
-  });
-
-  var flipKey = api.id + ":flip";
-
-  api.ui.registerExporter({
-    label: { zh: "示例:翻转点 CSV", en: "Sample: flip points CSV" },
-    run: function () {
-      var s = api.project.snapshot();
-      var lines = ["beat,timeMs,direction,power,hold"];
-      for (var i = 0; i < s.markers.length; i++) {
-        var m = s.markers[i];
-        var track = null;
-        for (var j = 0; j < s.tracks.length; j++) {
-          if (s.tracks[j].id === m.trackId) track = s.tracks[j];
-        }
-        if (!track || track.type !== flipKey || !m.attrs) continue;
-        lines.push(
-          m.beat +
-            "," +
-            m.timeMs.toFixed(3) +
-            "," +
-            m.attrs.direction +
-            "," +
-            (m.attrs.power !== undefined ? m.attrs.power : "") +
-            "," +
-            (m.attrs.hold ? 1 : 0),
-        );
-      }
-      if (lines.length === 1) {
-        api.log("exporter: no flip points to export");
-        return;
-      }
-      api.system
-        .saveFile({
-          title: "Export flip CSV",
-          defaultPath: "flip.csv",
-          filters: [{ name: "CSV", extensions: ["csv"] }],
-        })
-        .then(function (res) {
-          if (res.canceled || !res.filePath) return;
-          return api.system.writeText(res.filePath, lines.join("\n"));
-        })
-        .then(function (ok) {
-          api.log("exporter:", ok ? "saved" : "write failed");
-        });
-    },
-  });
-
-  api.ui.registerImporter({
-    label: { zh: "示例:导入翻转 CSV", en: "Sample: import flip CSV" },
-    run: function () {
-      api.system
-        .pickFile({
-          title: "Open flip CSV",
-          filters: [
-            { name: "CSV", extensions: ["csv", "txt"] },
-            { name: "All files", extensions: ["*"] },
-          ],
-        })
-        .then(function (path) {
-          if (!path) return;
-          return api.system.readText(path);
-        })
-        .then(function (res) {
-          if (!res || res.canceled || res.content === undefined) return;
-          var rows = res.content.split(/\r?\n/);
-          var trackId = null;
-          api.project.edit.batch(function () {
-            trackId = api.project.edit.addTypedTrack(flipKey);
-            for (var i = 0; i < rows.length; i++) {
-              var line = rows[i].trim();
-              if (!line || line.charAt(0) === "#") continue;
-              if (line.indexOf("beat") === 0) continue;
-              var cols = line.split(",");
-              var beat = parseFloat(cols[0]);
-              if (!isFinite(beat) || beat < 0) continue;
-              if (trackId) {
-                api.project.edit.addMarker({
-                  trackId: trackId,
-                  beat: beat,
-                });
-              }
-            }
-          });
-          api.log("importer: done, track =", trackId);
-        });
-    },
-  });
-
-  api.log("contributions registered");
+  api.log("Simai exporter ready");
 
   return function dispose() {
-    clearStopEvents();
-    api.log("renderer entry disposed");
+    api.log("Simai exporter disposed");
   };
 });
