@@ -1,108 +1,81 @@
-# Beat Data Generator 插件系统
+# 舞萌 Simai 导出（Beat Data Generator 插件）
 
-插件用于扩展踩点编辑器:导入/导出新格式、数据生成与批量编辑、侧栏浮动静默面板、
-自定义快捷键、独立预览窗口,以及针对特定游戏新增“类型化轨道”(如翻转事件),
-它们与内置踩点共用同一条节拍时间轴。
+把 [Beat Data Generator](https://github.com/BUGJI) 工程里的所有标记点导出为
+舞萌（maimai / Simai）谱面文本，并按拍位自动计算最小分拍网格、写入 BPM 变化。
 
-## 插件形态
+插件 id：`dev.bdg.simai-exporter`
 
-插件是一个文件夹,内含:
+## 安装
 
-```
-my-plugin/
-├─ manifest.json    # 元信息(必需)
-├─ main.js          # 可选:主进程入口(全 Node + Electron 权限)
-├─ renderer.js      # 可选:编辑器页面内执行的脚本(注册 UI 贡献)
-└─ …                # 插件自带的 HTML/静态资源
-```
+把本仓库整个文件夹放进插件扫描目录，重启编辑器：
 
-扫描目录:
+- 用户目录：`<userData>/plugins/`（编辑器设置页可一键打开）；
+- 开发模式：宿主工程根目录的 `plugins/`。
 
-- 用户目录 `<userData>/plugins`(设置页可一键打开);
-- 开发模式下同时扫描项目根目录的 `plugins/`(示例插件放这里)。
-- manifest 解析失败的插件会列在设置中并显示错误,不影响其余插件。
+## 使用
 
-### manifest.json
+- 「导出」菜单 →「舞萌 Simai 谱面」；
+- 「插件」菜单 →「导出舞萌 Simai 谱面」。
 
-```json
-{
-  "id": "dev.bdg.example-basic",
-  "version": "0.1.0",
-  "name": { "zh": "示例插件", "en": "Example Plugin" },
-  "description": { "zh": "…", "en": "…" },
-  "main": "main.js",
-  "renderer": "renderer.js"
-}
-```
+两者都会弹出保存对话框，默认文件名 `<工程名>.simai.txt`，输出为纯 Simai 谱面文本。
 
-`name`/`description` 可为字符串或 `{ zh, en }`。`id` 建议反向域名风格且**不得含冒号 `:`**。
+## 导出规则
 
-## renderer.js(UI 侧)
-
-`renderer.js` 是普通脚本,通过全局注册函数声明入口。类型提示:
-
-```js
-/// <reference path="plugin-api.d.ts" />
-window.__bdgPluginRegister(function activate(api) {
-  // 在此注册所有贡献(见 PluginApi 类型)
-  return function dispose() {
-    // 卸载清理(取消订阅等)
-  };
-});
-```
-
-可以注册的贡献:
-
-- `api.ui.registerAction({ label, run })` → 出现在顶部「插件」菜单;
-- `api.ui.registerPanel({ id, title, mount })` → 浮动静默窗口(可拖动、右下角可缩放),`mount(hostEl)` 里用 DOM 自由渲染,返回可选清理函数;返回 `PanelHandle` 可 `open()/toggle()` 等;
-- `api.ui.registerShortcut({ id, label, combo, run })` → `combo` 形如 `Alt+1`、`Ctrl+Shift+F`;
-- `api.ui.registerImporter({ label, run })` → 出现在「文件 → 导入…」;
-- `api.ui.registerExporter({ label, run })` → 出现在「导出」菜单的“插件导出”分组;
-- `api.trackTypes.register({ id, trackName, pointName, color?, fields })` → 新增类型化轨道,侧栏 `＋` 可创建,点在属性卡里编辑字段。
-
-## main.js(主进程侧)
-
-在主进程加载,拥有完整 Node / Electron:
-
-```js
-module.exports = function activate(ctx) {
-  ctx.log("loaded", ctx.dir);
-  ctx.registerHandler("ping", () => "pong");
-  ctx.onDispose(() => {});
-};
-```
-
-渲染进程用 `api.callMain(method, ...args)` 调本插件注册的处理器。`activate` 需保持同步。
-
-## 数据与工程文件
-
-- 快照:`api.project.snapshot()` 一次给出节拍视角与 `timeMs` 时间视角(见字段)。
-- 编辑一律走 `api.project.edit.*`,自动计入撤销栈;多步编辑用 `edit.batch(fn)` 合并为一次撤销。
-- 类型化轨道:轨道带 `type: "<pluginId>:<localId>"`;点带 `attrs`,字段默认值在放置/粘贴时自动补齐,或由插件用 `setMarkerAttrs` 修改。
-- 内置导出(.txt / EDL / 踩点指示灯)**不**包含类型化轨道;插件导出自行读取。
-- `.bdg` 直接存 `type` + `attrs`,字段全可选、向后兼容。若保存的工程含某插件类型而该插件未安装:轨道与数据照常显示(点属性只读),属性卡提示需要安装对应插件。
-
-## 渲染↔系统能力
-
-编辑器渲染层是沙箱(`sandbox:true` + `contextIsolation`)。插件拿到的是受限桥接:
-
-- 数据/编辑/播放/选区/事件、`api.system.pickFile/saveFile/readText/writeText`、`openWindow(加载任意页面)`、`api.system.audioPath()`(当前加载音频的绝对路径，便于 main.js 用 Node 读取并打包)、`callMain`;
-- 需要任意 Node 能力时让插件自带 `main.js` 处理。本系统**不弹权限确认**,安装插件即视为信任。
+- **Tap**：每个标记点导出一个单点。默认键位为 **1**。
+  标记点若带属性 `pos` / `position` / `button` / `key`，可覆盖键位：
+  `1`–`8` 为普通键，`A1`–`A8` 为触摸键。
+- **BPM**：起始 BPM（以及每个 BPM 点）取自宿主 `api.project.bpmAtBeat`，
+  以 `(bpm)` 内联写出，`abs` / `mult` 两种模式都由宿主解析。
+- **网格**：拍位量化到 1/96 拍；每小节（4 拍）求出最小分拍 `{n}`，
+  `n` 恒为 384 的因子（如 `{4}` `{8}` `{12}` `{16}` …）。
+  空槽用逗号占位，空小节输出 `{1},`（整小节休止）。
+- 谱面以 `E` 结尾。
 
 ## 示例
 
-`plugins/example-basic` 覆盖:面板、动作、快捷键、导入/导出、main 往返调用、类型化轨道注册。
-开发时把工程目录当扫描根即可(见上),发布则把插件放入 `<userData>/plugins`。
+标记点位于 0/1/2/3 拍，170 BPM：
 
-## 常用命令
-
-```bash
-npm run typecheck   # 改动编辑器代码后跑类型检查
-npm run build
 ```
+(170){4}1,1,1,1,
+E
+```
+
+标记点位于 0/0.5/…/3.5 拍（八分）：
+
+```
+(120){8}1,1,1,1,1,1,1,1,
+E
+```
+
+标记点在 0 与 2 拍，且第 2 拍变速到 200：
+
+```
+(170){2}1,(200)1,
+E
+```
+
+## 当前限制
+
+目前仅支持 **Tap** 与 **BPM 变化**；Hold、Slide、Break、Touch 音符尚未支持。
+所有音符默认落在键位 1，需要分散键位时给标记点加 `pos` 属性。
+
+## 开发
+
+```
+bdg_plugin_ma2/
+├─ manifest.json     # 元信息（必需）
+├─ main.js           # 主进程入口（占位，仅注册 info 处理器）
+├─ renderer.js       # 导出逻辑与 UI 贡献注册
+├─ plugin-api.d.ts   # 宿主 API 类型声明
+└─ README.md
+```
+
+`renderer.js` 顶部引用 `plugin-api.d.ts` 可获得编辑器类型提示；
+转换逻辑集中在 `buildChart()`，导出入口为 `runExport()`。
 
 ## 许可与发布
 
-- 你编写的插件属于你自己的作品(版权归你),可自行选择开源协议。
-- 宿主编辑器 **Beat Data Generator** 以 **GNU GPL v3** 发布(作者 BUGJI)。插件由宿主加载器装载运行,分发插件时建议注明与宿主的关联。
-- 官方插件模板/脚手架见 <https://github.com/BUGJI/bdg_plugin_template>。
+- 插件版权归 BUGJI，采用与宿主一致的 **GNU GPL v3**。
+- 宿主编辑器 **Beat Data Generator** 以 **GNU GPL v3** 发布（作者 BUGJI）。
+  插件由宿主加载器装载运行，分发时建议注明与宿主的关联。
+- 官方插件模板见 <https://github.com/BUGJI/bdg_plugin_template>。
