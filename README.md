@@ -1,6 +1,6 @@
 # 舞萌 Simai 导出（Beat Data Generator 插件）
 
-把 [Beat Data Generator](https://github.com/BUGJI) 工程里的所有标记点导出为
+把 [Beat Data Generator](https://github.com/BUGJI/beat_data_generator) 工程里的所有标记点导出为
 舞萌（maimai / Simai）谱面文本，并按拍位自动计算最小分拍网格、写入 BPM 变化。
 
 插件 id：`dev.bdg.simai-exporter`
@@ -62,7 +62,7 @@ E
 ## 开发
 
 ```
-bdg_plugin_ma2/
+bdg_plugin_simai/
 ├─ manifest.json     # 元信息（必需）
 ├─ main.js           # 主进程入口（占位，仅注册 info 处理器）
 ├─ renderer.js       # 导出逻辑与 UI 贡献注册
@@ -78,4 +78,4 @@ bdg_plugin_ma2/
 - 插件版权归 BUGJI，采用与宿主一致的 **GNU GPL v3**。
 - 宿主编辑器 **Beat Data Generator** 以 **GNU GPL v3** 发布（作者 BUGJI）。
   插件由宿主加载器装载运行，分发时建议注明与宿主的关联。
-- 官方插件模板见 <https://github.com/BUGJI/bdg_plugin_template>。
+- 官方插件模板见 <https://github.com/beat-data-generator/bdg_plugin_template>。
